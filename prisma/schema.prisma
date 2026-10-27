@@ -1,0 +1,489 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ============================================================================
+// NEXTAUTH, INVITE-ONLY ADMISSION, RBAC & AUDIT LOGGING
+// ============================================================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model PasswordCredential {
+  id                String    @id @default(cuid())
+  userId            String    @unique
+  passwordHash      String
+  passwordChangedAt DateTime  @default(now())
+  resetTokenHash    String?   @unique
+  resetExpiresAt    DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([resetExpiresAt])
+}
+
+model AccountInvitation {
+  id              String    @id @default(cuid())
+  code            String    @unique
+  tokenHash       String?   @unique
+  email           String?
+  normalizedEmail String?
+  activeForEmail  String?   @unique
+  role            String    @default("VIEWER") // "ADMIN" | "EDITOR" | "VIEWER"
+  status          String    @default("PENDING") // "PENDING" | "ACCEPTED" | "REVOKED" | "EXPIRED"
+  note            String?
+  invitedById     String?
+  acceptedById    String?
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @default(now()) @updatedAt
+
+  invitedBy  User? @relation("InvitationInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+  acceptedBy User? @relation("InvitationAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([status, expiresAt])
+  @@index([normalizedEmail, createdAt])
+  @@index([invitedById])
+  @@index([acceptedById])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  actorEmail String?
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   String   @default("{}")
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation("UserAuditLogs", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([action, createdAt])
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+}
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  emailVerified    DateTime?
+  name             String    @default("")
+  image            String?
+  avatar           String    @default("🎬")
+  role             String    @default("VIEWER") // "ADMIN" | "EDITOR" | "VIEWER"
+  status           String    @default("ACTIVE") // "ACTIVE" | "REVOKED"
+  revokedAt        DateTime?
+  revokedReason    String?
+  passwordHash     String?
+  isPublic         Boolean   @default(true)
+  adSkipEnabled    Boolean   @default(false)
+  doubanId         String?
+  doubanLastSyncAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  accounts            Account[]
+  sessions            Session[]
+  passwordCredential  PasswordCredential?
+  invitationsSent     AccountInvitation[] @relation("InvitationInviter")
+  invitationsAccepted AccountInvitation[] @relation("InvitationAcceptor")
+  auditLogs           AuditLog[]          @relation("UserAuditLogs")
+  watchHistories      WatchHistory[]
+  userMovies          UserMovie[]
+  comments            Comment[]
+  commentLikes        CommentLike[]
+  commentReplies      CommentReply[]
+  following           Follow[]            @relation("UserFollowing")
+  feedbacks           Feedback[]
+  notifications       Notification[]
+  danmakus            Danmaku[]
+  adFingerprintVotes  AdFingerprintVote[]
+}
+
+// ============================================================================
+// MOOVIE CATALOG, MULTI-SOURCE PLAYBACK & COMMUNITY MODELS
+// ============================================================================
+
+model Movie {
+  id                String   @id @default(cuid())
+  doubanId          String   @unique
+  imdbId            String?
+  tmdbId            String?
+  title             String
+  originalTitle     String?
+  year              String
+  type              String   @default("movie") // "movie" | "tv" | "show" | "cartoon"
+  poster            String
+  backdropsJson     String   @default("[]")
+  rating            Float    @default(0)
+  genres            String   @default("")
+  regions           String   @default("")
+  languages         String   @default("")
+  directors         String   @default("")
+  actors            String   @default("")
+  duration          String   @default("")
+  episodeBadge      String?
+  episodeCount      Int      @default(1)
+  currentEpisode    Int      @default(1)
+  airDate           String?
+  nextAirDate       String?
+  summary           String   @default("")
+  aiRecommendation  String?
+  doubanReviewsJson String   @default("[]")
+  seriesKey         String?
+  seasonNumber      Int?
+  seasonTitle       String?
+  isNew             Boolean  @default(false)
+  isHot             Boolean  @default(false)
+  isTrending        Boolean  @default(false)
+  watchedCount      Int      @default(0)
+  wishCount         Int      @default(0)
+  viewCount         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  playbackSources  PlaybackSource[]
+  episodes         Episode[]
+  watchHistories   WatchHistory[]
+  userMovies       UserMovie[]
+  comments         Comment[]
+  curatedListItems CuratedListItem[]
+
+  @@index([type, isHot])
+  @@index([isTrending, viewCount])
+  @@index([seriesKey, seasonNumber])
+}
+
+model PlaybackSource {
+  id           String   @id @default(cuid())
+  movieId      String
+  sourceKey    String
+  sourceName   String
+  vodId        String
+  versionLabel String   @default("HD中字")
+  loadSpeedMs  Int      @default(500)
+  stability    String   @default("稳定") // "稳定" | "一般" | "较差" | "未测"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  movie    Movie     @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  episodes Episode[]
+
+  @@index([movieId])
+  @@index([sourceKey, vodId])
+}
+
+model Episode {
+  id            String  @id @default(cuid())
+  movieId       String
+  sourceId      String
+  episodeNumber Int
+  title         String
+  playUrl       String
+  airDate       String?
+
+  movie  Movie          @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  source PlaybackSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+
+  @@index([movieId, episodeNumber])
+  @@index([sourceId, episodeNumber])
+}
+
+model WatchHistory {
+  id            String   @id @default(cuid())
+  userId        String
+  movieId       String
+  doubanId      String
+  episodeNumber Int      @default(1)
+  episodeTitle  String   @default("第01集")
+  sourceKey     String   @default("ffzy")
+  vodId         String   @default("")
+  currentTime   Int      @default(0)
+  duration      Int      @default(3600)
+  entryType     String   @default("watch")
+  updatedAt     DateTime @default(now()) @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, movieId])
+  @@index([userId, updatedAt])
+}
+
+model UserMovie {
+  id        String    @id @default(cuid())
+  userId    String
+  movieId   String
+  doubanId  String
+  status    String    @default("wish") // "wish" | "watching" | "watched"
+  rating    Int?
+  comment   String?
+  watchedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  movie Movie @relation(fields: [movieId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, movieId])
+  @@index([userId, status, updatedAt])
+  @@index([doubanId, status])
+}
+
+// Non-login catalog cinephile profile for public reviews/radar (zero demo login accounts)
+model CinephileProfile {
+  id               String   @id
+  username         String
+  avatar           String   @default("🎞️")
+  bio              String   @default("")
+  joinedDays       Int      @default(45)
+  watchedCount     Int      @default(18)
+  wishCount        Int      @default(9)
+  reviewsCount     Int      @default(12)
+  avgRating        Float    @default(8.4)
+  personaTag       String   @default("深夜迷影漫游者")
+  longestStreak    Int      @default(6)
+  topGenresJson    String   @default("[\"剧情\",\"悬疑\",\"科幻\"]")
+  watchedDoubanIds String   @default("[]")
+  wishDoubanIds    String   @default("[]")
+  createdAt        DateTime @default(now())
+
+  comments Comment[]
+}
+
+model Comment {
+  id           String   @id @default(cuid())
+  movieId      String
+  doubanId     String
+  userId       String?
+  profileId    String?
+  authorName   String
+  authorAvatar String   @default("🎬")
+  rating       Int      @default(5)
+  content      String
+  likesCount   Int      @default(0)
+  isFeatured   Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  movie   Movie             @relation(fields: [movieId], references: [id], onDelete: Cascade)
+  user    User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  profile CinephileProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  likes   CommentLike[]
+  replies CommentReply[]
+
+  @@index([movieId, createdAt])
+  @@index([isFeatured, createdAt])
+}
+
+model CommentLike {
+  id        String   @id @default(cuid())
+  commentId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([commentId, userId])
+}
+
+model CommentReply {
+  id           String   @id @default(cuid())
+  commentId    String
+  userId       String?
+  authorName   String
+  authorAvatar String   @default("🎬")
+  content      String
+  createdAt    DateTime @default(now())
+
+  comment Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([commentId, createdAt])
+}
+
+model Follow {
+  id              String   @id @default(cuid())
+  followerId      String
+  targetId        String
+  targetName      String
+  targetAvatar    String   @default("🎬")
+  createdAt       DateTime @default(now())
+
+  follower User @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, targetId])
+  @@index([followerId])
+}
+
+model CuratedList {
+  id               String   @id @default(cuid())
+  slug             String   @unique
+  title            String
+  description      String
+  isPublished      Boolean  @default(true)
+  relatedSlugsJson String   @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  items CuratedListItem[]
+}
+
+model CuratedListItem {
+  id       String @id @default(cuid())
+  listId   String
+  movieId  String
+  doubanId String
+  rank     Int
+  note     String
+
+  list  CuratedList @relation(fields: [listId], references: [id], onDelete: Cascade)
+  movie Movie       @relation(fields: [movieId], references: [id], onDelete: Cascade)
+
+  @@unique([listId, movieId])
+  @@index([listId, rank])
+}
+
+model SearchTrend {
+  id        String   @id @default(cuid())
+  keyword   String   @unique
+  doubanId  String?
+  count24h  Int      @default(100)
+  countAll  Int      @default(1000)
+  isHot     Boolean  @default(false)
+  isNew     Boolean  @default(false)
+  updatedAt DateTime @default(now()) @updatedAt
+}
+
+model Feedback {
+  id         String    @id @default(cuid())
+  userId     String?
+  authorName String    @default("匿名用户")
+  type       String    @default("bug") // "bug" | "request" | "suggestion" | "dmca"
+  movieUrl   String?
+  content    String
+  status     String    @default("pending") // "pending" | "resolved"
+  adminReply String?
+  repliedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([type, createdAt])
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id            String   @id @default(cuid())
+  userId        String
+  actorName     String
+  actorAvatar   String   @default("🎬")
+  actorTargetId String?
+  type          String   @default("like") // "like" | "reply" | "follow" | "system"
+  commentId     String?
+  movieDoubanId String?
+  message       String
+  isRead        Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead, createdAt])
+}
+
+model Danmaku {
+  id         String   @id @default(cuid())
+  streamKey  String
+  userId     String?
+  authorName String   @default("片友")
+  text       String
+  time       Float    @default(0)
+  color      String   @default("#ffffff")
+  mode       Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([streamKey, time])
+}
+
+model AdFingerprint {
+  id              String   @id @default(cuid())
+  fingerprint     String   @unique
+  sourceKey       String   @default("ffzy")
+  segmentDuration Float    @default(15)
+  confirmVotes    Int      @default(0)
+  rejectVotes     Int      @default(0)
+  isConfirmed     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  votes AdFingerprintVote[]
+}
+
+model AdFingerprintVote {
+  id            String   @id @default(cuid())
+  fingerprintId String
+  userId        String
+  isAd          Boolean
+  createdAt     DateTime @default(now())
+
+  fingerprint AdFingerprint @relation(fields: [fingerprintId], references: [id], onDelete: Cascade)
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([fingerprintId, userId])
+}
+
+model ContentFilter {
+  id          String   @id @default(cuid())
+  keyword     String   @unique
+  isBlocked   Boolean  @default(false)
+  isCopyright Boolean  @default(false)
+  isSensitive Boolean  @default(false)
+  note        String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
